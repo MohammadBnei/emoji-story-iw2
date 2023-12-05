@@ -1,9 +1,10 @@
 import { useEffect, useState } from "react";
-import { StoryStep } from "../../../../interface/emoji";
+import { Emoji, StoryStep } from "@/interface/emoji";
 import Step from "./Step";
 import { Meta, StoryObj } from "@storybook/react";
 
 const primaryStep: StoryStep = {
+  order: 1,
   selectedEmoji: "",
   emojiContender: [
     {
@@ -44,45 +45,79 @@ const primaryStep: StoryStep = {
 const Wrapper = () => {
   const [step, setStep] = useState<StoryStep>(primaryStep);
   const [timeLeft, setTimeLeft] = useState<number>(20);
+  const [currentVote, setCurrentVote] = useState<string>("");
 
   useEffect(() => {
     const interval = setInterval(() => {
-      setTimeLeft((t) => t - 1);
+      setTimeLeft((t) => (t === 0 ? t : t - 1));
     }, 1000);
 
     return () => {
       clearInterval(interval);
     };
-  }, []);
+  }, [timeLeft]);
+
+  useEffect(() => {
+    if (timeLeft !== 0) return;
+
+    setStep((s) => ({
+      ...s,
+      selectedEmoji:
+        s.emojiContender?.reduce(
+          (acc, cur) => {
+            if (!acc.value || cur.votes > acc.votes) return cur;
+
+            return acc;
+          },
+          { value: "", votes: 0 } as Emoji
+        )?.value || "",
+    }));
+  }, [timeLeft]);
 
   const handleVote = (emoji: string) => {
-    setStep((s) => {
-      if (!s.emojiContender) return s;
-      const index = s.emojiContender?.findIndex((e) => e.value === emoji);
+    if (timeLeft === 0) return;
 
-      if (index === -1 || index === undefined) {
-        return s;
-      }
+    setStep((s) => ({
+      ...s,
+      emojiContender: s.emojiContender
+        ?.map((emojiContenderItem) =>
+          emojiContenderItem.value === emoji &&
+          emojiContenderItem.value !== currentVote
+            ? {
+                ...emojiContenderItem,
+                votes: emojiContenderItem?.votes + 1,
+              }
+            : emojiContenderItem
+        )
+        .map((emojiContenderItem) =>
+          emojiContenderItem.value === currentVote
+            ? {
+                ...emojiContenderItem,
+                votes: emojiContenderItem?.votes - 1,
+              }
+            : emojiContenderItem
+        ),
+    }));
 
-      const current = s.emojiContender[index];
-
-      s.emojiContender?.splice(index, 1, {
-        ...current,
-        votes: current.votes + 1,
-      });
-
-      return s;
-    });
+    setCurrentVote((cur) => (cur === emoji ? "" : emoji));
   };
 
   return (
     <>
-      <button className="btn" onClick={() => setTimeLeft(20)}>
+      <button
+        className="btn"
+        onClick={() => {
+          setTimeLeft(10);
+          setCurrentVote("");
+          setStep(primaryStep);
+        }}
+      >
         Init timer
       </button>
       <Step
-        step={step}
-        stepNumber={0}
+        emojiContenders={step.emojiContender || []}
+        selectedEmoji={step.selectedEmoji}
+        stepNumber={1}
         timeLeft={timeLeft}
         handleEmojiClick={handleVote}
       />

@@ -1,106 +1,131 @@
 "use client";
 import Step from "@/component/UI/step/Step";
 import { useEffect, useState } from "react";
-import { Story, StoryStep } from "interface/emoji";
+import { Manager, Socket, io } from "socket.io-client";
+import { P, E, I } from "@/interface";
 import { toast } from "react-toastify";
-import { socket } from "@/service/socket";
-import { signal } from "@preact/signals-react";
+import { useHotkeys } from "react-hotkeys-hook";
 
-const username = signal("anonymous");
-const currentStep = signal<StoryStep | null>(null);
-const fullStory = signal<Story | null>(null);
+const manager = new Manager(process.env.NEXT_PUBLIC_SOCKET_URL as string, {
+  reconnection: true,
+});
+
+const socket: Socket<E.ServerToClientEvents, E.ClientToServerEvents> =
+  manager.socket("/");
 
 export default function Home() {
-  const [timeLeftPerStep, setTimeLeftPerStep] = useState<
-    Record<number, number>
-  >({});
-
-  const client = socket.value;
+  const [step, setStep] = useState<I.StoryStep | null>(null);
+  const [story, setStory] = useState<I.Story | null>(null);
+  const [stepNumber, setStepNumber] = useState<number>(0);
+  const [timeLeft, setTimeLeft] = useState<number>(-1);
 
   useEffect(() => {
-    client.on("story-update", (data) => {
-      fullStory.value = data;
+    socket.on(E.STORY_UPDATE, ({ story }) => {
+      console.log({ story });
+      setStory(story);
+      if (story.steps.length === 0) {
+        setStepNumber(0);
+      }
     });
 
-    client.on("step-time", ({ stepOrder, timeLeft }) => {
-      setTimeLeftPerStep({ [stepOrder]: timeLeft });
-      if (window.location.href.includes("#step-" + stepOrder)) {
-        toast("🦄 Wow so easy!", {
-          position: "top-right",
-          autoClose: 1000,
-          hideProgressBar: false,
-          closeOnClick: true,
-          pauseOnHover: true,
-          draggable: true,
+    socket.on(E.STORY_ERROR, (message, data) => {
+      toast(message, {
+        type: "error",
+      });
+      console.log(message, data);
+    });
+    socket.on(E.EMOJI_ERROR, (message, data) => {
+      toast(message, {
+        type: "error",
+      });
+      console.log(message, data);
+    });
+
+    return () => {
+      socket.off();
+    };
+  }, []);
+
+  useEffect(() => {
+    socket.emit(E.STORY_STEP_GENERATE, { stepNumber }, setStepNumber);
+    socket.on(E.STEP_UPDATE, ({ stepNumber: _stepNumber, timeLeft }) => {
+      setTimeLeft(timeLeft);
+      if (stepNumber !== _stepNumber) {
+        toast(`Step ${_stepNumber} 🪲`, {
+          toastId: stepNumber,
+          updateId: stepNumber,
+          autoClose: 500,
         });
       }
     });
 
     return () => {
-      client.disconnect();
+      socket.off(E.STEP_UPDATE);
     };
-  }, [client]);
+  }, [stepNumber]);
 
-  const handleVote = (emoji: string, stepOrder: number) => {
-    client.emit("step-vote", { stepOrder, emoji });
+  useEffect(() => {
+    if (!story || stepNumber > story?.steps.length) {
+      return;
+    }
+
+    setStep(story?.steps.find((s) => s.order === stepNumber) || null);
+  }, [stepNumber, story]);
+
+  const handleVote = (emoji: string) => {
+    socket.emit(E.EMOJI_VOTE, { emoji });
   };
+
+  
+  const handleInit = () => {
+    socket.emit(E.STORY_INIT);
+    setStepNumber(0);
+  };
+
+  useHotkeys("ctrl+i", handleInit);
+  useHotkeys("ctrl+r", () => socket.emit(E.STORY_REGENERATE));
+
   return (
-    <main className="flex min-h-screen flex-col items-center justify-center p-24 gap-8">
-      {fullStory.value?.storyGPT && (
-        <div className="w-full glass p-10">
-          <p>{fullStory.value.storyGPT}</p>
-        </div>
-      )}
-      <div className="my-4">
+    <main className="flex min-h-screen flex-col items-center justify-between p-4 lg:p-24">
+      <div className="flex gap-4">
         <button
-          className="btn btn-primary btn-wide"
+          className="btn btn-lg"
           onClick={() =>
-            client.emit("story-step-handle", {
-              stepNumber: (fullStory.value?.steps.length || 0) + 1,
-            })
+            socket.emit(
+              E.STORY_STEP_GENERATE,
+              { stepNumber: stepNumber + 1 },
+              setStepNumber
+            )
           }
         >
           Next Step
         </button>
       </div>
-      <div className="carousel w-full rounded-box">
-        {fullStory.value?.steps.map((step) => (
-          <div
-            id={`step-${step.order}`}
-            className="carousel-item relative w-full"
-            key={step.order}
-          >
-            <Step
-              step={step}
-              timeLeft={timeLeftPerStep[step.order] || 0}
-              handleEmojiClick={handleVote}
-            />
-            <div className="absolute flex justify-between transform  left-5 right-5">
+      <div className="text-sm breadcrumbs">
+        <ul>
+          {story?.steps.map((step) => (
+            <li key={step.order}>
               <a
-                href={`#step-${
-                  step.order === 1
-                    ? fullStory.value?.steps.length
-                    : step.order - 1
-                }`}
-                className="btn btn-circle btn-info"
+                className="link text-xl "
+                onClick={() => setStepNumber(step.order)}
               >
-                ❮
+                {step.order}
+                {step.selectedEmoji}
               </a>
-              <a
-                href={`#step-${
-                  fullStory.value?.steps.length <= step.order
-                    ? 1
-                    : step.order + 1
-                }`}
-                className="btn btn-circle btn-info"
-              >
-                ❯
-              </a>
-            </div>
-          </div>
-        ))}
+            </li>
+          ))}
+        </ul>
       </div>
-      {" "}
+      <div className="glass p-4">
+        <p className="text-xl">{story?.openAiStory}</p>
+      </div>
+      <Step
+        emojiContenders={step?.emojiContender || []}
+        selectedEmoji={step?.selectedEmoji || ""}
+        stepNumber={stepNumber}
+        timeLeft={timeLeft}
+        handleEmojiClick={handleVote}
+      />
     </main>
   );
 }
